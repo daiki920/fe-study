@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>基本情報技術者試験 対策アプリ</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d1b2a; font-family: 'Hiragino Sans', 'Yu Gothic', sans-serif; }
+    input, button { font-family: inherit; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: translateY(0); }
+      40% { transform: translateY(-6px); }
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+const CATEGORIES = [
+  { id: "algorithm", label: "アルゴリズム", icon: "🔁" },
+  { id: "data_structure", label: "データ構造", icon: "🗃️" },
+  { id: "computer_arch", label: "コンピュータ構成", icon: "💻" },
+  { id: "os", label: "OS・ソフトウェア", icon: "⚙️" },
+  { id: "network", label: "ネットワーク", icon: "🌐" },
+  { id: "security", label: "セキュリティ", icon: "🔒" },
+  { id: "database", label: "データベース", icon: "🗄️" },
+  { id: "management", label: "経営・戦略", icon: "📊" },
+  { id: "law", label: "法務・標準化", icon: "📋" },
+];
+
+function RingChart({ percent, size = 80, color = "#4f8ef7" }) {
+  const r = 34;
+  const circ = 2 * Math.PI * r;
+  const dash = (percent / 100) * circ;
+  return (
+    <svg width={size} height={size} viewBox="0 0 80 80">
+      <circle cx="40" cy="40" r={r} fill="none" stroke="#1e2d4a" strokeWidth="8" />
+      <circle cx="40" cy="40" r={r} fill="none"
+        stroke={percent >= 80 ? "#34d399" : percent >= 60 ? color : "#f87171"}
+        strokeWidth="8"
+        strokeDasharray={`${dash} ${circ}`}
+        strokeLinecap="round"
+        transform="rotate(-90 40 40)"
+        style={{ transition: "stroke-dasharray 0.6s ease" }}
+      />
+      <text x="40" y="45" textAnchor="middle" fontSize="16" fontWeight="bold"
+        fill={percent >= 80 ? "#34d399" : percent >= 60 ? "#fff" : "#f87171"}>
+        {percent}%
+      </text>
+    </svg>
+  );
+}
+
+function LoadingDots() {
+  return (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+      {[0, 1, 2].map(i => (
+        <span key={i} style={{
+          width: 7, height: 7, borderRadius: "50%", background: "#4f8ef7",
+          animation: `bounce 1.2s ${i * 0.2}s infinite`,
+          display: "inline-block"
+        }} />
+      ))}
+    </span>
+  );
+}
+
+async function callClaude(messages, systemPrompt) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      system: systemPrompt,
+      messages,
+    }),
+  });
+  const data = await res.json();
+  return data.content?.map(b => b.text || "").join("") || "";
+}
+
+async function generateQuestion(category, difficulty = "standard") {
+  const catLabel = CATEGORIES.find(c => c.id === category)?.label || category;
+  const system = `あなたは基本情報技術者試験の問題作成専門家です。
+必ずJSON形式のみで回答してください。前置きや説明は不要です。
+以下のJSON形式で1問出題してください：
+{"question":"問題文","choices":["ア. 選択肢1","イ. 選択肢2","ウ. 選択肢3","エ. 選択肢4"],"answer":0,"explanation":"解説","keyword":"キーワード"}
+answerは正解のchoicesのインデックス（0〜3）。
+難易度: ${difficulty === "hard" ? "やや難しめ" : "標準的な試験レベル"}`;
+  const raw = await callClaude(
+    [{ role: "user", content: `分野「${catLabel}」で基本情報技術者試験レベルの問題を1問作成してください。` }],
+    system
+  );
+  try {
+    const json = raw.replace(/```json|```/g, "").trim();
+    return JSON.parse(json);
+  } catch { return null; }
+}
+
+async function askExplanation(question, history, userMsg) {
+  const system = `あなたは基本情報技術者試験の親切な講師です。
+以下の問題について受験生の質問に丁寧に答えてください。
+問題: ${question.question}
+正解: ${question.choices[question.answer]}
+解説: ${question.explanation}`;
+  return await callClaude([...history, { role: "user", content: userMsg }], system);
+}
+
+async function generateSummary(category) {
+  const catLabel = CATEGORIES.find(c => c.id === category)?.label || category;
+  const system = `あなたは基本情報技術者試験の参考書執筆者です。Markdown形式で試験直前まとめノートを作成してください。`;
+  return await callClaude(
+    [{ role: "user", content: `「${catLabel}」分野の試験直前まとめノートを作成してください。` }],
+    system
+  );
+}
+
+function MdRender({ text }) {
+  const lines = text.split("\n");
+  return (
+    <div style={{ fontSize: 14, lineHeight: 1.7, color: "#e2e8f0" }}>
+      {lines.map((line, i) => {
+        if (line.startsWith("## ")) return <h3 key={i} style={{ color: "#4f8ef7", marginTop: 16, marginBottom: 4, fontSize: 15 }}>{line.slice(3)}</h3>;
+        if (line.startsWith("# ")) return <h2 key={i} style={{ color: "#60a5fa", marginTop: 20, marginBottom: 6, fontSize: 17 }}>{line.slice(2)}</h2>;
+        if (line.startsWith("- ") || line.startsWith("* ")) {
+          const content = line.slice(2).replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
+          return <li key={i} style={{ marginLeft: 16, marginBottom: 4 }} dangerouslySetInnerHTML={{ __html: content }} />;
+        }
+        const content = line.replace(/\*\*(.*?)\*\*/g, "<b style='color:#fbbf24'>$1</b>");
+        return line.trim() ? <p key={i} style={{ marginBottom: 6 }} dangerouslySetInnerHTML={{ __html: content }} /> : <br key={i} />;
+      })}
+    </div>
+  );
+}
+
+function QuizTab({ stats, onAnswer }) {
+  const [phase, setPhase] = useState("select");
+  const [selCat, setSelCat] = useState(null);
+  const [question, setQuestion] = useState(null);
+  const [chosen, setChosen] = useState(null);
+  const [chatHistory, setChatHistory] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const sortedCats = [...CATEGORIES].sort((a, b) => {
+    const sa = stats[a.id] || { correct: 0, total: 0 };
+    const sb = stats[b.id] || { correct: 0, total: 0 };
+    const ra = sa.total ? sa.correct / sa.total : 1;
+    const rb = sb.total ? sb.correct / sb.total : 1;
+    return ra - rb;
+  });
+
+  async function startQuiz(catId) {
+    setSelCat(catId);
+    setPhase("loading");
+    setError("");
+    const s = stats[catId] || { correct: 0, total: 0 };
+    const rate = s.total ? s.correct / s.total : 1;
+    const q = await generateQuestion(catId, rate < 0.6 ? "hard" : "standard");
+    if (!q) { setError("問題の生成に失敗しました。もう一度お試しください。"); setPhase("select"); return; }
+    setQuestion(q);
+    setChosen(null);
+    setChatHistory([]);
+    setPhase("question");
+  }
+
+  function submitAnswer(idx) {
+    setChosen(idx);
+    onAnswer(selCat, idx === question.answer);
+    setPhase("result");
+  }
+
+  async function sendChat() {
+    if (!chatInput.trim()) return;
+    const msg = chatInput.trim();
+    setChatInput("");
+    const newHistory = [...chatHistory, { role: "user", content: msg }];
+    setChatHistory(newHistory);
+    setChatLoading(true);
+    const reply = await askExplanation(question, chatHistory, msg);
+    setChatHistory([...newHistory, { role: "assistant", content: reply }]);
+    setChatLoading(false);
+  }
+
+  const s = selCat ? (stats[selCat] || { correct: 0, total: 0 }) : null;
+
+  if (phase === "select") return (
+    <div>
+      <p style={{ color: "#94a3b8", fontSize: 13, marginBottom: 16 }}>⚠️ 正答率の低い分野が上に表示されています</p>
+      {sortedCats.map(cat => {
+        const st = stats[cat.id] || { correct: 0, total: 0 };
+        const rate = st.total ? Math.round(st.correct / st.total * 100) : null;
+        return (
+          <button key={cat.id} onClick={() => startQuiz(cat.id)}
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "14px 16px", marginBottom: 8, background: "#1e2d4a", border: "1px solid #2d3f5e", borderRadius: 10, color: "#e2e8f0", fontSize: 14, cursor: "pointer" }}>
+            <span>{cat.icon} {cat.label}</span>
+            <span style={{ fontSize: 12, color: rate === null ? "#64748b" : rate < 60 ? "#f87171" : rate >= 80 ? "#34d399" : "#fbbf24" }}>
+              {rate !== null ? `${rate}% (${st.total}問)` : "未挑戦"}
+            </span>
+          </button>
+        );
+      })}
+      {error && <p style={{ color: "#f87171", fontSize: 13, textAlign: "center", marginTop: 12 }}>{error}</p>}
+    </div>
+  );
+
+  if (phase === "loading") return (
+    <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}>
+      <div style={{ fontSize: 32, marginBottom: 16 }}>✨</div>
+      <div style={{ marginBottom: 8 }}>問題を生成中</div>
+      <LoadingDots />
+    </div>
+  );
+
+  if (!question) return null;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <span style={{ background: "#162032", border: "1px solid #2d3f5e", borderRadius: 6, padding: "4px 10px", fontSize: 12, color: "#60a5fa" }}>
+          {CATEGORIES.find(c => c.id === selCat)?.icon} {CATEGORIES.find(c => c.id === selCat)?.label}
+        </span>
+        {s?.total > 0 && <span style={{ fontSize: 12, color: "#64748b" }}>この分野: {Math.round(s.correct / s.total * 100)}%</span>}
+      </div>
+      <div style={{ background: "#162032", borderRadius: 10, padding: 16, marginBottom: 16, fontSize: 14, lineHeight: 1.7, color: "#e2e8f0", border: "1px solid #2d3f5e" }}>
+        {question.question}
+      </div>
+      {question.choices.map((c, i) => {
+        let bg = "#1e2d4a", border = "#2d3f5e", col = "#e2e8f0";
+        if (phase === "result") {
+          if (i === question.answer) { bg = "#064e3b"; border = "#34d399"; col = "#6ee7b7"; }
+          else if (i === chosen && chosen !== question.answer) { bg = "#450a0a"; border = "#f87171"; col = "#fca5a5"; }
+        }
+        return (
+          <button key={i} onClick={() => phase === "question" && submitAnswer(i)} disabled={phase === "result"}
+            style={{ display: "block", width: "100%", padding: "12px 14px", marginBottom: 8, background: bg, border: `1px solid ${border}`, borderRadius: 10, color: col, fontSize: 14, textAlign: "left", cursor: phase === "question" ? "pointer" : "default" }}>
+            {c}
+          </button>
+        );
+      })}
+      {phase === "result" && (
+        <div>
+          <div style={{ background: "#162032", borderRadius: 10, padding: 14, marginBottom: 12, border: "1px solid #2d3f5e" }}>
+            <div style={{ fontSize: 12, color: "#60a5fa", marginBottom: 6 }}>📝 解説</div>
+            <div style={{ fontSize: 13, lineHeight: 1.7, color: "#cbd5e1" }}>{question.explanation}</div>
+            {question.keyword && <div style={{ marginTop: 8, fontSize: 12 }}><span style={{ background: "#1e3a5f", borderRadius: 4, padding: "2px 8px", color: "#7dd3fc" }}>🔑 {question.keyword}</span></div>}
+          </div>
+          <div style={{ background: "#162032", borderRadius: 10, padding: 14, marginBottom: 12, border: "1px solid #2d3f5e" }}>
+            <div style={{ fontSize: 12, color: "#a78bfa", marginBottom: 10 }}>💬 この問題について質問する</div>
+            {chatHistory.map((m, i) => (
+              <div key={i} style={{ marginBottom: 8, padding: "8px 12px", borderRadius: 8, fontSize: 13, background: m.role === "user" ? "#1e3a5f" : "#0f2233", color: m.role === "user" ? "#bfdbfe" : "#cbd5e1", textAlign: m.role === "user" ? "right" : "left" }}>{m.content}</div>
+            ))}
+            {chatLoading && <div style={{ color: "#64748b", fontSize: 13, marginBottom: 8 }}><LoadingDots /></div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <input value={chatInput} onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && sendChat()}
+                placeholder="わからないことを質問…"
+                style={{ flex: 1, background: "#0d1b2a", border: "1px solid #2d3f5e", borderRadius: 8, color: "#e2e8f0", padding: "8px 12px", fontSize: 13, outline: "none" }} />
+              <button onClick={sendChat}
+                style={{ background: "#4f8ef7", border: "none", borderRadius: 8, padding: "8px 14px", color: "#fff", fontSize: 13, cursor: "pointer" }}>送信</button>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setPhase("select")}
+              style={{ flex: 1, padding: "12px", background: "#1e2d4a", border: "1px solid #2d3f5e", borderRadius: 10, color: "#94a3b8", fontSize: 14, cursor: "pointer" }}>← 分野選択</button>
+            <button onClick={() => startQuiz(selCat)}
+              style={{ flex: 2, padding: "12px", background: "#4f8ef7", border: "none", borderRadius: 10, color: "#fff", fontSize: 14, cursor: "pointer", fontWeight: "bold" }}>次の問題 →</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatsTab({ stats }) {
+  const allTotal = Object.values(stats).reduce((s, v) => s + v.total, 0);
+  const allCorrect = Object.values(stats).reduce((s, v) => s + v.correct, 0);
+  const overall = allTotal ? Math.round(allCorrect / allTotal * 100) : 0;
+  return (
+    <div>
+      <div style={{ textAlign: "center", padding: "24px 0 16px" }}>
+        <RingChart percent={overall} size={100} />
+        <div style={{ color: "#94a3b8", fontSize: 13, marginTop: 8 }}>総合正答率 ({allTotal}問回答)</div>
+        <div style={{ marginTop: 8, fontSize: 13, color: overall >= 70 ? "#34d399" : "#fbbf24" }}>
+          {overall >= 80 ? "🎉 合格ライン突破！仕上げをしよう" : overall >= 70 ? "💪 あと一歩！苦手分野を集中攻略" : overall >= 60 ? "📖 基礎は固まってきた。演習量を増やそう" : "🌱 まずは各分野を1周してみよう"}
+        </div>
+      </div>
+      <div style={{ borderTop: "1px solid #1e2d4a", paddingTop: 16 }}>
+        {CATEGORIES.map(cat => {
+          const s = stats[cat.id] || { correct: 0, total: 0 };
+          const rate = s.total ? Math.round(s.correct / s.total * 100) : null;
+          return (
+            <div key={cat.id} style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 13 }}>
+                <span style={{ color: "#e2e8f0" }}>{cat.icon} {cat.label}</span>
+                <span style={{ color: rate === null ? "#475569" : rate < 60 ? "#f87171" : rate >= 80 ? "#34d399" : "#fbbf24" }}>
+                  {rate !== null ? `${rate}% (${s.total}問)` : "—"}
+                </span>
+              </div>
+              <div style={{ background: "#1e2d4a", borderRadius: 4, height: 6 }}>
+                <div style={{ width: `${rate || 0}%`, height: 6, borderRadius: 4, background: rate === null ? "#1e2d4a" : rate < 60 ? "#f87171" : rate >= 80 ? "#34d399" : "#4f8ef7", transition: "width 0.6s ease" }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function NoteTab({ stats }) {
+  const [selCat, setSelCat] = useState(null);
+  const [content, setContent] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const weakCats = CATEGORIES.filter(c => {
+    const s = stats[c.id];
+    return s && s.total > 0 && s.correct / s.total < 0.7;
+  });
+
+  async function loadNote(cat) {
+    setSelCat(cat.id);
+    setLoading(true);
+    setContent("");
+    const note = await generateSummary(cat.id);
+    setContent(note);
+    setLoading(false);
+  }
+
+  return (
+    <div>
+      {!selCat ? (
+        <>
+          {weakCats.length > 0 && (
+            <div style={{ background: "#1e1040", border: "1px solid #4c1d95", borderRadius: 10, padding: 12, marginBottom: 16 }}>
+              <div style={{ fontSize: 12, color: "#a78bfa", marginBottom: 8 }}>🎯 重点復習が必要な分野</div>
+              {weakCats.map(c => (
+                <button key={c.id} onClick={() => loadNote(c)}
+                  style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 12px", marginBottom: 6, background: "#2d1b69", border: "1px solid #4c1d95", borderRadius: 8, color: "#c4b5fd", fontSize: 13, cursor: "pointer" }}>
+                  {c.icon} {c.label}のまとめを生成
+                </button>
+              ))}
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>すべての分野</div>
+          {CATEGORIES.map(cat => (
+            <button key={cat.id} onClick={() => loadNote(cat)}
+              style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "12px 14px", marginBottom: 8, background: "#1e2d4a", border: "1px solid #2d3f5e", borderRadius: 10, color: "#e2e8f0", fontSize: 14, cursor: "pointer" }}>
+              <span>{cat.icon}</span><span>{cat.label}</span>
+            </button>
+          ))}
+        </>
+      ) : loading ? (
+        <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}>
+          <div style={{ fontSize: 32, marginBottom: 16 }}>📝</div>
+          <div style={{ marginBottom: 8 }}>まとめノートを生成中</div>
+          <LoadingDots />
+        </div>
+      ) : (
+        <div>
+          <button onClick={() => setSelCat(null)}
+            style={{ background: "none", border: "none", color: "#60a5fa", fontSize: 13, cursor: "pointer", marginBottom: 16, padding: 0 }}>← 分野一覧に戻る</button>
+          <div style={{ background: "#162032", borderRadius: 10, padding: 16, border: "1px solid #2d3f5e" }}>
+            <MdRender text={content} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState("quiz");
+  const [stats, setStats] = useState(() => {
+    try { const s = localStorage.getItem("fe_stats"); return s ? JSON.parse(s) : {}; }
+    catch { return {}; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem("fe_stats", JSON.stringify(stats)); } catch {}
+  }, [stats]);
+
+  const handleAnswer = useCallback((catId, correct) => {
+    setStats(prev => {
+      const cur = prev[catId] || { correct: 0, total: 0 };
+      return { ...prev, [catId]: { correct: cur.correct + (correct ? 1 : 0), total: cur.total + 1 } };
+    });
+  }, []);
+
+  const TABS = [
+    { id: "quiz", label: "演習", icon: "✏️" },
+    { id: "stats", label: "進捗", icon: "📈" },
+    { id: "note", label: "まとめ", icon: "📖" },
+  ];
+
+  return (
+    <div style={{ background: "#0d1b2a", minHeight: "100vh", color: "#e2e8f0", maxWidth: 480, margin: "0 auto" }}>
+      <div style={{ background: "#0a1628", borderBottom: "1px solid #1e2d4a", padding: "16px", position: "sticky", top: 0, zIndex: 10 }}>
+        <div style={{ fontSize: 16, fontWeight: "bold", color: "#fff" }}>基本情報技術者試験 対策</div>
+        <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>AI問題生成 · 苦手分析 · まとめノート</div>
+      </div>
+      <div style={{ display: "flex", background: "#0a1628", borderBottom: "1px solid #1e2d4a" }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            style={{ flex: 1, padding: "12px 0", background: "none", border: "none", borderBottom: tab === t.id ? "2px solid #4f8ef7" : "2px solid transparent", color: tab === t.id ? "#4f8ef7" : "#64748b", fontSize: 13, cursor: "pointer" }}>
+            {t.icon} {t.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ padding: 16 }}>
+        {tab === "quiz" && <QuizTab stats={stats} onAnswer={handleAnswer} />}
+        {tab === "stats" && <StatsTab stats={stats} />}
+        {tab === "note" && <NoteTab stats={stats} />}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
